@@ -1,17 +1,17 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║          LATTICE-AUTOMATE  |  AI Agent Framework             ║
-║          Guardrails de Negocio + Proxy de Privacidad         ║
+║          Business Guardrails + Privacy Proxy Integration     ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Arquitectura:
-  [Usuario] → [LatticeAgent] → [Lattice Proxy :8080] → [LLM]
-                     ↓
-              [Pydantic Schema]  ← Valida estructura JSON
-                     ↓
-              [PolicyEngine]     ← Valida reglas de negocio
-                     ↓
-              [Respuesta segura al usuario]
+Architecture:
+  [User] → [LatticeAgent] → [Lattice Proxy :8080] → [LLM]
+                 ↓
+          [Pydantic Schema]  ← Validates JSON structure
+                 ↓
+          [PolicyEngine]     ← Validates business rules
+                 ↓
+          [Safe response to user]
 """
 
 import json
@@ -27,12 +27,12 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator, ValidationError
 
 # ─────────────────────────────────────────────────────────────
-# Ruta del archivo de reglas de negocio
+# Business rules file path
 # ─────────────────────────────────────────────────────────────
 _RULES_FILE = Path(__file__).parent / "business_rules.yaml"
 
 # ─────────────────────────────────────────────────────────────
-# Configuración
+# Configuration
 # ─────────────────────────────────────────────────────────────
 load_dotenv()
 
@@ -50,96 +50,96 @@ logger = logging.getLogger("lattice-automate")
 
 
 # ─────────────────────────────────────────────────────────────
-# Schemas Pydantic (Salida 100% Estructurada)
+# Pydantic Schemas (100% Structured Output)
 # ─────────────────────────────────────────────────────────────
 
 class InsuranceQuoteResponse(BaseModel):
     """
-    Esquema de respuesta para cotización de seguro.
-    La IA SOLO puede devolver este formato — sin excepciones.
+    Response schema for insurance quotes.
+    The LLM can ONLY return this exact format — no exceptions.
     """
 
-    explicacion: str = Field(
+    explanation: str = Field(
         ...,
         min_length=10,
-        description="Explicación detallada del cálculo de la prima",
+        description="Detailed explanation of the premium calculation",
     )
-    aprobado: bool = Field(
+    approved: bool = Field(
         ...,
-        description="Si la cotización ha sido aprobada por el sistema",
+        description="Whether the quote has been approved by the system",
     )
-    valor_final: float = Field(
+    final_value: float = Field(
         ...,
         ge=0.0,
-        description="Prima final en EUR",
+        description="Final premium in EUR",
     )
-    descuento_aplicado: float = Field(
+    discount_applied: float = Field(
         default=0.0,
         ge=0.0,
         le=100.0,
-        description="Porcentaje de descuento aplicado (0-100)",
+        description="Discount percentage applied (0-100)",
     )
-    nivel_riesgo: str = Field(
+    risk_level: str = Field(
         ...,
-        description="Nivel de riesgo calculado: BAJO | MEDIO | ALTO",
+        description="Calculated risk level: LOW | MEDIUM | HIGH",
     )
 
-    @field_validator("nivel_riesgo")
+    @field_validator("risk_level")
     @classmethod
     def validate_risk_level(cls, value: str) -> str:
-        allowed = {"BAJO", "MEDIO", "ALTO"}
+        allowed = {"LOW", "MEDIUM", "HIGH"}
         normalized = value.strip().upper()
         if normalized not in allowed:
             raise ValueError(
-                f"nivel_riesgo inválido: '{value}'. Debe ser uno de {allowed}"
+                f"Invalid risk_level: '{value}'. Must be one of {allowed}"
             )
         return normalized
 
     def to_display(self) -> str:
-        """Formatea la respuesta para mostrarla al usuario."""
-        status = "✅ APROBADO" if self.aprobado else "❌ NO APROBADO"
+        """Formats the response for display to the user."""
+        status = "✅ APPROVED" if self.approved else "❌ NOT APPROVED"
         return (
-            f"\n  Estado:        {status}\n"
-            f"  Riesgo:        {self.nivel_riesgo}\n"
-            f"  Prima final:   {self.valor_final:,.2f} EUR\n"
-            f"  Descuento:     {self.descuento_aplicado:.1f}%\n"
-            f"  Explicación:   {self.explicacion}\n"
+            f"\n  Status:          {status}\n"
+            f"  Risk Level:      {self.risk_level}\n"
+            f"  Final Premium:   {self.final_value:,.2f} EUR\n"
+            f"  Discount:        {self.discount_applied:.1f}%\n"
+            f"  Explanation:     {self.explanation}\n"
         )
 
 
 # ─────────────────────────────────────────────────────────────
-# Excepciones de Seguridad
+# Security Exceptions
 # ─────────────────────────────────────────────────────────────
 
 class PolicyViolationError(Exception):
     """
-    Lanzada cuando la respuesta de la IA infringe una regla de negocio.
-    El mensaje llegará al log pero NUNCA al usuario directamente.
+    Raised when the AI response violates a business rule.
+    The message is logged but NEVER shown directly to the user.
     """
 
 
 class LatticeConnectionError(Exception):
-    """Lanzada cuando no hay conexión con el Lattice Proxy."""
+    """Raised when the Lattice Proxy is unreachable."""
 
 
 # ─────────────────────────────────────────────────────────────
-# Motor de Reglas — PolicyEngine
+# Business Rules Engine — PolicyEngine
 # ─────────────────────────────────────────────────────────────
 
 class PolicyEngine:
     """
-    Validador determinista de respuestas IA.
+    Deterministic AI response validator.
 
-    Carga las reglas desde 'business_rules.yaml' en tiempo de ejecución.
-    Actúa como cortafuegos entre la salida del LLM y el usuario:
-      · validate_request() — bloquea ANTES de llamar al LLM (edad, región)
-      · validate()         — bloquea DESPUÉS (descuento, prima, riesgo)
+    Loads rules from 'business_rules.yaml' at startup.
+    Acts as a firewall between LLM output and the user:
+      · validate_request() — blocks BEFORE calling the LLM (age, region)
+      · validate()         — blocks AFTER (discount, premium, risk)
 
-    Este es el componente que convierte Lattice-Automate en
-    "Constitutional AI" — IA con una constitución de negocio.
+    This is the component that makes Lattice-Automate "Constitutional AI"
+    — AI with a business constitution it cannot override.
     """
 
-    # Fallbacks si no existe business_rules.yaml
+    # Fallbacks when business_rules.yaml is not found
     _DEFAULTS: dict = {
         "policies": {
             "max_discount": 0.15,
@@ -148,7 +148,7 @@ class PolicyEngine:
             "min_premium_eur": 50.0,
             "min_age_insured": 18,
             "restricted_regions": [],
-            "required_fields": ["DNI", "EMAIL", "PHONE"],
+            "required_fields": ["SSN", "EMAIL", "PHONE"],
         }
     }
 
@@ -164,144 +164,144 @@ class PolicyEngine:
         self.RESTRICTED_REGIONS: set[str] = {r.upper() for r in p["restricted_regions"]}
 
         logger.info(
-            "[PolicyEngine] Reglas cargadas — max_descuento=%.0f%% | prima=[%.0f–%.0f EUR] | "
-            "edad_min=%d | regiones_bloqueadas=%d",
+            "[PolicyEngine] Rules loaded — max_discount=%.0f%% | premium=[%.0f–%.0f EUR] | "
+            "min_age=%d | blocked_regions=%d",
             self.MAX_DISCOUNT_PCT, self.MIN_PREMIUM_EUR, self.MAX_PREMIUM_EUR,
             self.MIN_AGE, len(self.RESTRICTED_REGIONS),
         )
 
     def _load_rules(self) -> dict:
-        """Carga business_rules.yaml. Si no existe, usa valores por defecto."""
+        """Loads business_rules.yaml. Falls back to defaults if not found."""
         if _RULES_FILE.exists():
             with open(_RULES_FILE, encoding="utf-8") as fh:
                 loaded = yaml.safe_load(fh)
-            logger.info("[PolicyEngine] Reglas cargadas desde %s", _RULES_FILE.name)
+            logger.info("[PolicyEngine] Rules loaded from %s", _RULES_FILE.name)
             return loaded
         logger.warning(
-            "[PolicyEngine] %s no encontrado. Usando valores por defecto.", _RULES_FILE.name
+            "[PolicyEngine] %s not found. Using built-in defaults.", _RULES_FILE.name
         )
         return self._DEFAULTS
 
-    # ── Validación PRE-LLM (petición del usuario) ─────────────
+    # ── PRE-LLM validation (user request) ────────────────────
 
-    def validate_request(self, edad: int | None = None, region: str | None = None) -> None:
+    def validate_request(self, age: int | None = None, region: str | None = None) -> None:
         """
-        Valida los datos del usuario ANTES de llamar al LLM.
-        Si hay un problema (menor de edad, zona bloqueada), se rechaza
-        sin gastar ni un token.
+        Validates user data BEFORE calling the LLM.
+        If there is a problem (underage, blocked region), the request is
+        rejected without spending a single token.
         """
         violations: list[str] = []
 
-        # REGLA 101 — Edad mínima del asegurado
-        if edad is not None and edad < self.MIN_AGE:
+        # RULE 101 — Minimum insurable age
+        if age is not None and age < self.MIN_AGE:
             violations.append(
-                f"POLICY_101: Edad {edad} inferior al mínimo asegurable ({self.MIN_AGE} años)"
+                f"POLICY_101: Age {age} is below the minimum insurable age ({self.MIN_AGE})"
             )
 
-        # REGLA 102 — Zonas no asegurables
+        # RULE 102 — Non-insurable regions
         if region is not None and region.upper() in self.RESTRICTED_REGIONS:
             violations.append(
-                f"POLICY_102: Región '{region}' está en la lista de zonas no asegurables: "
+                f"POLICY_102: Region '{region}' is in the blocked zone list: "
                 f"{sorted(self.RESTRICTED_REGIONS)}"
             )
 
         if violations:
             detail = "\n".join(f"  • {v}" for v in violations)
             raise PolicyViolationError(
-                f"[PolicyEngine] Solicitud bloqueada pre-LLM:\n{detail}"
+                f"[PolicyEngine] Request blocked (pre-LLM):\n{detail}"
             )
 
-    # ── Validación POST-LLM (respuesta de la IA) ─────────────
+    # ── POST-LLM validation (AI response) ────────────────────
 
     def validate(self, response: InsuranceQuoteResponse) -> None:
         """
-        Ejecuta todas las reglas de negocio sobre la respuesta del LLM.
-        Lanza PolicyViolationError si alguna falla.
+        Runs all business rules against the LLM response.
+        Raises PolicyViolationError if any rule fails.
         """
         violations: list[str] = []
 
-        # REGLA 001 — Descuento máximo permitido
-        if response.descuento_aplicado > self.MAX_DISCOUNT_PCT:
+        # RULE 001 — Maximum discount allowed
+        if response.discount_applied > self.MAX_DISCOUNT_PCT:
             violations.append(
-                f"POLICY_001: Descuento {response.descuento_aplicado:.1f}% "
-                f"supera el límite autorizado de {self.MAX_DISCOUNT_PCT:.1f}%"
+                f"POLICY_001: Discount {response.discount_applied:.1f}% "
+                f"exceeds the authorized limit of {self.MAX_DISCOUNT_PCT:.1f}%"
             )
 
-        # REGLA 002 — Prima máxima cotizable
-        if response.valor_final > self.MAX_PREMIUM_EUR:
+        # RULE 002 — Maximum quotable premium
+        if response.final_value > self.MAX_PREMIUM_EUR:
             violations.append(
-                f"POLICY_002: Prima {response.valor_final:,.2f} EUR "
-                f"excede el máximo cotizable de {self.MAX_PREMIUM_EUR:,.2f} EUR"
+                f"POLICY_002: Premium {response.final_value:,.2f} EUR "
+                f"exceeds the maximum quotable value of {self.MAX_PREMIUM_EUR:,.2f} EUR"
             )
 
-        # REGLA 003 — Prima mínima (solo si está aprobado)
-        if response.aprobado and response.valor_final < self.MIN_PREMIUM_EUR:
+        # RULE 003 — Minimum premium (only if approved)
+        if response.approved and response.final_value < self.MIN_PREMIUM_EUR:
             violations.append(
-                f"POLICY_003: Prima {response.valor_final:.2f} EUR "
-                f"inferior al mínimo permitido de {self.MIN_PREMIUM_EUR:.2f} EUR"
+                f"POLICY_003: Premium {response.final_value:.2f} EUR "
+                f"is below the minimum allowed of {self.MIN_PREMIUM_EUR:.2f} EUR"
             )
 
-        # REGLA 004 — Riesgo ALTO con descuento excesivo
+        # RULE 004 — HIGH risk with excessive discount
         if (
-            response.aprobado
-            and response.nivel_riesgo == "ALTO"
-            and response.descuento_aplicado > self.HIGH_RISK_MAX_DISCOUNT_PCT
+            response.approved
+            and response.risk_level == "HIGH"
+            and response.discount_applied > self.HIGH_RISK_MAX_DISCOUNT_PCT
         ):
             violations.append(
-                f"POLICY_004: Riesgo ALTO — descuento máximo permitido "
+                f"POLICY_004: HIGH risk policy — maximum discount allowed is "
                 f"{self.HIGH_RISK_MAX_DISCOUNT_PCT:.0f}%, "
-                f"solicitado {response.descuento_aplicado:.1f}%"
+                f"requested {response.discount_applied:.1f}%"
             )
 
         if violations:
             detail = "\n".join(f"  • {v}" for v in violations)
             raise PolicyViolationError(
-                f"[PolicyEngine] {len(violations)} violación(es) de política detectada(s):\n{detail}"
+                f"[PolicyEngine] {len(violations)} policy violation(s) detected:\n{detail}"
             )
 
-        logger.info("[PolicyEngine] ✓ Respuesta validada. Sin violaciones.")
+        logger.info("[PolicyEngine] ✓ Response validated. No violations.")
 
 
 # ─────────────────────────────────────────────────────────────
-# Agente Principal — LatticeAgent
+# Main Agent — LatticeAgent
 # ─────────────────────────────────────────────────────────────
 
 def _build_system_prompt(engine: "PolicyEngine") -> str:
-    """Genera el prompt de sistema dinámicamente desde las reglas cargadas en PolicyEngine."""
+    """Generates the system prompt dynamically from the rules loaded in PolicyEngine."""
     return (
-        "Eres un agente especializado en seguros de una aseguradora española regulada.\n\n"
-        "Tu ÚNICA función es calcular primas de seguro siguiendo las reglas de negocio a continuación.\n"
-        "Estás sujeto a un sistema de auditoría estricto. Cualquier respuesta fuera del formato\n"
-        "o que infrinja las reglas será rechazada automáticamente.\n\n"
-        "═══ REGLAS DE NEGOCIO (cargadas desde business_rules.yaml) ════\n"
-        f"  • Prima mínima:               {engine.MIN_PREMIUM_EUR:,.0f} EUR\n"
-        f"  • Prima máxima:               {engine.MAX_PREMIUM_EUR:,.0f} EUR\n"
-        f"  • Descuento máximo:           {engine.MAX_DISCOUNT_PCT:.0f}%\n"
-        f"  • Descuento en riesgo ALTO:   máximo {engine.HIGH_RISK_MAX_DISCOUNT_PCT:.0f}%\n"
-        "  • Niveles de riesgo válidos:  BAJO | MEDIO | ALTO\n"
+        "You are a specialized insurance agent for a regulated insurance company.\n\n"
+        "Your ONLY function is to calculate insurance premiums following the business rules below.\n"
+        "You are subject to a strict audit system. Any response outside the required format\n"
+        "or that violates the rules will be automatically rejected.\n\n"
+        "═══ BUSINESS RULES (loaded from business_rules.yaml) ════════\n"
+        f"  • Minimum premium:              {engine.MIN_PREMIUM_EUR:,.0f} EUR\n"
+        f"  • Maximum premium:              {engine.MAX_PREMIUM_EUR:,.0f} EUR\n"
+        f"  • Maximum discount:             {engine.MAX_DISCOUNT_PCT:.0f}%\n"
+        f"  • Discount on HIGH risk:        maximum {engine.HIGH_RISK_MAX_DISCOUNT_PCT:.0f}%\n"
+        "  • Valid risk levels:            LOW | MEDIUM | HIGH\n"
         "══════════════════════════════════════════════════════════════\n\n"
-        "FORMATO DE RESPUESTA OBLIGATORIO (solo JSON, sin texto adicional):\n"
+        "MANDATORY RESPONSE FORMAT (JSON only, no additional text):\n"
         "{\n"
-        '    "explicacion": "<explicación clara del cálculo, mínimo 10 caracteres>",\n'
-        '    "aprobado": <true o false>,\n'
-        '    "valor_final": <prima en EUR como número decimal>,\n'
-        '    "descuento_aplicado": <porcentaje entre 0.0 y 100.0>,\n'
-        '    "nivel_riesgo": "<BAJO | MEDIO | ALTO>"\n'
+        '    "explanation": "<clear explanation of the calculation, minimum 10 characters>",\n'
+        '    "approved": <true or false>,\n'
+        '    "final_value": <premium in EUR as a decimal number>,\n'
+        '    "discount_applied": <percentage between 0.0 and 100.0>,\n'
+        '    "risk_level": "<LOW | MEDIUM | HIGH>"\n'
         "}\n\n"
-        "CRÍTICO: No incluyas texto antes ni después del JSON. Solo el objeto JSON."
+        "CRITICAL: Do not include any text before or after the JSON. Output the JSON object only."
     )
 
 
 class LatticeAgent:
     """
-    Agente de IA con raíles (guardrails) de negocio.
+    AI agent with business guardrails.
 
-    Pipeline completo:
-      1. Construye mensajes con historial de conversación
-      2. Enruta la llamada al LLM a través del Lattice Proxy (privacidad)
-      3. Parsea la respuesta con Pydantic (estructura garantizada)
-      4. Valida con PolicyEngine (reglas de negocio)
-      5. Persiste el historial solo si pasa todas las validaciones
+    Full pipeline:
+      1. Builds messages with conversation history
+      2. Routes the LLM call through the Lattice Proxy (privacy)
+      3. Parses the response with Pydantic (guaranteed structure)
+      4. Validates with PolicyEngine (business rules)
+      5. Persists history only if all validations pass
     """
 
     def __init__(self) -> None:
@@ -309,25 +309,25 @@ class LatticeAgent:
         self._system_prompt = _build_system_prompt(self.policy_engine)
         self.conversation_history: list[dict[str, str]] = []
 
-    # ── Construcción de contexto ──────────────────────────────
+    # ── Context construction ──────────────────────────────────
 
     def _build_messages(self, user_message: str) -> list[dict[str, str]]:
         """
-        Construye la lista de mensajes respetando el vault de tokens de Lattice.
-        Incluye el historial reciente hasta MAX_HISTORY_CHARS caracteres.
+        Builds the message list respecting the Lattice token vault.
+        Includes recent history up to MAX_HISTORY_CHARS characters.
         """
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self._system_prompt}
         ]
 
-        # Incluir historial de atrás hacia adelante respetando el límite
-        accumulated_chars = len(_SYSTEM_PROMPT)
+        # Include history back-to-front respecting the token limit
+        accumulated_chars = len(self._system_prompt)
         history_slice: list[dict[str, str]] = []
 
         for msg in reversed(self.conversation_history):
             msg_len = len(msg["content"])
             if accumulated_chars + msg_len > MAX_HISTORY_CHARS:
-                logger.debug("[LatticeAgent] Historial truncado por límite de tokens.")
+                logger.debug("[LatticeAgent] History truncated at token limit.")
                 break
             history_slice.insert(0, msg)
             accumulated_chars += msg_len
@@ -336,12 +336,12 @@ class LatticeAgent:
         messages.append({"role": "user", "content": user_message})
         return messages
 
-    # ── Llamada al proxy Lattice ──────────────────────────────
+    # ── Lattice proxy call ────────────────────────────────────
 
     def _call_lattice(self, messages: list[dict[str, str]]) -> str:
         """
-        Envía la petición a través del Lattice Privacy Proxy.
-        Lattice anonimiza los datos personales ANTES de enviarlos al LLM.
+        Sends the request through the Lattice Privacy Proxy.
+        Lattice anonymizes personal data BEFORE it reaches the LLM.
         """
         payload = {
             "model": LLM_MODEL,
@@ -350,7 +350,7 @@ class LatticeAgent:
             "stream": False,
         }
 
-        logger.info("[LatticeAgent] Enviando petición a %s (modelo: %s)", LATTICE_URL, LLM_MODEL)
+        logger.info("[LatticeAgent] Sending request to %s (model: %s)", LATTICE_URL, LLM_MODEL)
 
         try:
             with httpx.Client(timeout=60.0) as client:
@@ -358,36 +358,36 @@ class LatticeAgent:
                 response.raise_for_status()
         except httpx.ConnectError:
             raise LatticeConnectionError(
-                f"No se puede conectar con Lattice Proxy en {LATTICE_URL}. "
-                "Asegúrate de que lattice-proxy está ejecutándose (puerto 8080)."
+                f"Cannot connect to Lattice Proxy at {LATTICE_URL}. "
+                "Make sure lattice-proxy is running (port 8080)."
             )
         except httpx.HTTPStatusError as exc:
             raise LatticeConnectionError(
-                f"Lattice Proxy devolvió error HTTP {exc.response.status_code}: {exc.response.text}"
+                f"Lattice Proxy returned HTTP error {exc.response.status_code}: {exc.response.text}"
             )
 
         data = response.json()
         raw_content: str = data["choices"][0]["message"]["content"]
-        logger.debug("[LatticeAgent] Respuesta cruda recibida (%d chars)", len(raw_content))
+        logger.debug("[LatticeAgent] Raw response received (%d chars)", len(raw_content))
         return raw_content
 
-    # ── Parseo y validación estructural ──────────────────────
+    # ── Structural parsing and validation ────────────────────
 
     def _parse_response(self, raw: str) -> InsuranceQuoteResponse:
         """
-        Extrae y valida el JSON de la respuesta del LLM usando Pydantic.
-        Si la IA incluyó texto extra, se elimina. Si el JSON es inválido,
-        se lanza una excepción antes de llegar al PolicyEngine.
+        Extracts and validates the JSON from the LLM response using Pydantic.
+        If the AI included extra text, it is stripped. If the JSON is invalid,
+        an exception is raised before reaching the PolicyEngine.
         """
         raw = raw.strip()
 
-        # Extraer el bloque JSON aunque haya texto extra
+        # Extract the JSON block even if there is surrounding text
         start = raw.find("{")
         end = raw.rfind("}") + 1
 
         if start == -1 or end == 0:
             raise ValueError(
-                f"La IA no devolvió JSON válido. Respuesta recibida:\n{raw[:300]}"
+                f"The AI did not return valid JSON. Response received:\n{raw[:300]}"
             )
 
         json_str = raw[start:end]
@@ -395,189 +395,190 @@ class LatticeAgent:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"JSON malformado en la respuesta de la IA: {exc}") from exc
+            raise ValueError(f"Malformed JSON in AI response: {exc}") from exc
 
         try:
             return InsuranceQuoteResponse(**data)
         except ValidationError as exc:
             raise ValueError(
-                f"La respuesta de la IA no cumple el esquema Pydantic:\n{exc}"
+                f"AI response does not match the Pydantic schema:\n{exc}"
             ) from exc
 
-    # ── Pipeline principal ────────────────────────────────────
+    # ── Main pipeline ─────────────────────────────────────────
 
     def process(
         self,
         user_message: str,
-        edad: int | None = None,
+        age: int | None = None,
         region: str | None = None,
     ) -> InsuranceQuoteResponse:
         """
-        Ejecuta el pipeline completo de forma segura y determinista.
+        Executes the full pipeline in a safe and deterministic way.
 
         Args:
-            user_message: Consulta en lenguaje natural del usuario.
-            edad:  Edad del solicitante (validada pre-LLM contra business_rules.yaml).
-            region: Zona geográfica (validada pre-LLM contra restricted_regions).
+            user_message: Natural language query from the user.
+            age:    Applicant's age (validated pre-LLM against business_rules.yaml).
+            region: Geographic area (validated pre-LLM against restricted_regions).
 
         Returns:
-            InsuranceQuoteResponse validado y aprobado por PolicyEngine.
+            InsuranceQuoteResponse validated and approved by PolicyEngine.
 
         Raises:
-            PolicyViolationError: si la IA infringe reglas de negocio O si el
-                                  cliente no cumple requisitos previos (edad, región).
-            LatticeConnectionError: si Lattice Proxy no está disponible.
-            ValueError: si la respuesta de la IA tiene formato inválido.
+            PolicyViolationError: if the AI violates business rules OR if the
+                                  client does not meet pre-conditions (age, region).
+            LatticeConnectionError: if the Lattice Proxy is not available.
+            ValueError: if the AI response has an invalid format.
         """
-        # 0. Validación PRE-LLM — sin gastar tokens
-        self.policy_engine.validate_request(edad=edad, region=region)
+        # 0. PRE-LLM validation — no tokens spent
+        self.policy_engine.validate_request(age=age, region=region)
 
         messages = self._build_messages(user_message)
 
-        # 1. Llamada al LLM a través de Lattice (privacidad garantizada)
+        # 1. LLM call through Lattice (privacy guaranteed)
         raw_response = self._call_lattice(messages)
 
-        # 2. Parseo estructurado con Pydantic
+        # 2. Structured parsing with Pydantic
         quote = self._parse_response(raw_response)
 
-        # 3. Validación de reglas de negocio — puede lanzar PolicyViolationError
+        # 3. Business rule validation — may raise PolicyViolationError
         self.policy_engine.validate(quote)
 
-        # 4. Persistir historial SOLO si todo es válido
+        # 4. Persist history ONLY if everything is valid
         self.conversation_history.append({"role": "user", "content": user_message})
         self.conversation_history.append({"role": "assistant", "content": raw_response})
 
         return quote
 
     def reset_history(self) -> None:
-        """Limpia el historial de conversación."""
+        """Clears the conversation history."""
         self.conversation_history.clear()
-        logger.info("[LatticeAgent] Historial de conversación reiniciado.")
+        logger.info("[LatticeAgent] Conversation history reset.")
 
 
 # ─────────────────────────────────────────────────────────────
-# Demo de Ejemplo — Aseguradora
+# Demo — Insurance Use Case
 # ─────────────────────────────────────────────────────────────
 
 def run_demo() -> None:
     """
-    Demostración completa del sistema.
+    Full system demonstration.
 
-    Casos de uso:
-      ✓ Cotización normal → aprobada
-      ✗ Descuento excesivo → bloqueado por PolicyEngine
-      ✓ Consulta de seguimiento → usa historial
+    Test cases:
+      ✓ Normal quote → approved
+      ✗ Underage applicant → blocked PRE-LLM (no tokens spent)
+      ✗ Restricted region → blocked PRE-LLM (no tokens spent)
+      ✗ Excessive discount → blocked POST-LLM by PolicyEngine
+      ✓ Follow-up query → uses conversation history
     """
     separator = "═" * 65
 
     print(f"\n{separator}")
-    print("  LATTICE-AUTOMATE  |  Motor de Agentes con Guardrails")
-    print(f"  Proxy de privacidad: {LATTICE_URL}")
-    print(f"  Modelo LLM:          {LLM_MODEL}")
+    print("  LATTICE-AUTOMATE  |  AI Agent with Business Guardrails")
+    print(f"  Privacy proxy: {LATTICE_URL}")
+    print(f"  LLM model:     {LLM_MODEL}")
     print(separator)
 
     agent = LatticeAgent()
 
-    # (mensaje, edad, region) — los dos últimos son opcionales
+    # (message, age, region) — last two are optional
     test_cases: list[tuple[str, int | None, str | None]] = [
-        # Caso 1: Cotización legítima — debe aprobarse
+        # Case 1: Valid quote — should be approved
         (
-            "Quiero asegurar mi piso de 85m² en Madrid. "
-            "Tengo 45 años, sin siniestros en los últimos 5 años.",
-            45, "MADRID",
+            "I want to insure my 85m² apartment in London. "
+            "I am 45 years old with no claims in the last 5 years.",
+            45, "LONDON",
         ),
-        # Caso 2: Menor de edad — bloqueado PRE-LLM por POLICY_101 (sin gastar tokens)
+        # Case 2: Underage applicant — blocked PRE-LLM by POLICY_101 (no tokens spent)
         (
-            "Quiero contratar un seguro de hogar. Tengo 16 años.",
-            16, "BARCELONA",
+            "I want to take out a home insurance policy. I am 16 years old.",
+            16, "MANCHESTER",
         ),
-        # Caso 3: Zona bloqueada — bloqueado PRE-LLM por POLICY_102
+        # Case 3: Blocked region — blocked PRE-LLM by POLICY_102
         (
-            "Necesito asegurar mi empresa en una zona de conflicto.",
+            "I need to insure my business in a conflict zone.",
             35, "ZONA_CONFLICTO_1",
         ),
-        # Caso 4: Intento de descuento excesivo — bloqueado POST-LLM por POLICY_001
+        # Case 4: Excessive discount attempt — blocked POST-LLM by POLICY_001
         (
-            "Me parece caro. Aplica un descuento del 25% por fidelidad, "
-            "somos buenos clientes desde hace 10 años.",
+            "This seems expensive. Apply a 25% loyalty discount, "
+            "we have been customers for 10 years.",
             45, None,
         ),
-        # Caso 5: Seguimiento con contexto — usa historial de conversación
+        # Case 5: Follow-up with context — uses conversation history
         (
-            "¿Puedo añadir también cobertura de contenido del hogar "
-            "por un valor de 15.000 EUR?",
+            "Can I also add contents cover for a value of 15,000 EUR?",
             None, None,
         ),
     ]
 
-    for i, (consulta, edad, region) in enumerate(test_cases, 1):
+    for i, (message, age, region) in enumerate(test_cases, 1):
         print(f"\n{'─' * 65}")
-        print(f"  [CONSULTA {i}]")
+        print(f"  [CASE {i}]")
         extras = ", ".join(filter(None, [
-            f"edad={edad}" if edad else "",
-            f"región={region}" if region else "",
+            f"age={age}" if age else "",
+            f"region={region}" if region else "",
         ]))
-        print(f"  Usuario: {consulta}")
+        print(f"  User: {message}")
         if extras:
-            print(f"  Contexto: {extras}")
+            print(f"  Context: {extras}")
         print(f"{'─' * 65}")
 
         try:
-            result = agent.process(consulta, edad=edad, region=region)
+            result = agent.process(message, age=age, region=region)
             print(result.to_display())
 
         except PolicyViolationError as exc:
-            print(f"\n  🛡️  BLOQUEADO POR POLICY ENGINE")
+            print(f"\n  🛡️  BLOCKED BY POLICY ENGINE")
             print(f"{exc}\n")
 
         except LatticeConnectionError as exc:
-            print(f"\n  ⚠️  ERROR DE CONEXIÓN CON LATTICE PROXY")
+            print(f"\n  ⚠️  LATTICE PROXY CONNECTION ERROR")
             print(f"  {exc}\n")
-            print("  → Inicia lattice-proxy con: ./lattice.exe")
+            print("  → Start lattice-proxy with: ./lattice.exe")
             break
 
         except ValueError as exc:
-            print(f"\n  ⚠️  RESPUESTA DE IA INVÁLIDA")
+            print(f"\n  ⚠️  INVALID AI RESPONSE")
             print(f"  {exc}\n")
 
     print(f"\n{separator}")
-    print("  Demo completada. Todas las llamadas pasaron por Lattice Proxy.")
-    print(f"  Historial: {len(agent.conversation_history) // 2} turno(s) almacenado(s).")
+    print("  Demo complete. All calls routed through Lattice Proxy.")
+    print(f"  History: {len(agent.conversation_history) // 2} turn(s) stored.")
     print(f"{separator}\n")
 
 
 # ─────────────────────────────────────────────────────────────
-# Modo interactivo
+# Interactive mode
 # ─────────────────────────────────────────────────────────────
 
 def run_interactive() -> None:
-    """Modo de conversación interactiva con el agente."""
+    """Interactive conversation mode with the agent."""
     separator = "═" * 65
     print(f"\n{separator}")
-    print("  LATTICE-AUTOMATE  |  Modo Interactivo")
-    print(f"  Proxy: {LATTICE_URL}  |  Modelo: {LLM_MODEL}")
-    print("  Escribe 'salir' para terminar, 'reset' para nueva conversación.")
+    print("  LATTICE-AUTOMATE  |  Interactive Mode")
+    print(f"  Proxy: {LATTICE_URL}  |  Model: {LLM_MODEL}")
+    print("  Type 'exit' to quit, 'reset' to start a new conversation.")
     print(separator)
 
     agent = LatticeAgent()
 
     while True:
         try:
-            user_input = input("\n  Tu consulta: ").strip()
+            user_input = input("\n  Your query: ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\n\n  Sesión finalizada.")
+            print("\n\n  Session ended.")
             break
 
         if not user_input:
             continue
 
-        if user_input.lower() == "salir":
-            print("\n  Sesión finalizada.")
+        if user_input.lower() == "exit":
+            print("\n  Session ended.")
             break
 
         if user_input.lower() == "reset":
             agent.reset_history()
-            print("  ✓ Nueva conversación iniciada.")
+            print("  ✓ New conversation started.")
             continue
 
         try:
@@ -585,14 +586,14 @@ def run_interactive() -> None:
             print(result.to_display())
 
         except PolicyViolationError as exc:
-            print(f"\n  🛡️  BLOQUEADO POR POLICY ENGINE\n{exc}")
+            print(f"\n  🛡️  BLOCKED BY POLICY ENGINE\n{exc}")
 
         except LatticeConnectionError as exc:
-            print(f"\n  ⚠️  ERROR DE CONEXIÓN: {exc}")
-            print("  → Asegúrate de que lattice-proxy está activo en el puerto 8080.")
+            print(f"\n  ⚠️  CONNECTION ERROR: {exc}")
+            print("  → Make sure lattice-proxy is running on port 8080.")
 
         except ValueError as exc:
-            print(f"\n  ⚠️  RESPUESTA INVÁLIDA: {exc}")
+            print(f"\n  ⚠️  INVALID RESPONSE: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────

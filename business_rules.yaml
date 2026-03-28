@@ -1,48 +1,48 @@
 # ═══════════════════════════════════════════════════════════════
-#  LATTICE-AUTOMATE  |  Reglas de Negocio (Business Rules)
+#  LATTICE-AUTOMATE  |  Business Rules
 # ═══════════════════════════════════════════════════════════════
 #
-#  Este archivo es el "cerebro" del PolicyEngine.
-#  Cualquier cambio aquí se aplica en caliente sin tocar código.
-#  En producción, este archivo lo gestiona el equipo de Compliance.
+#  This file is the "brain" of the PolicyEngine.
+#  Any change here takes effect on the next restart — no code changes needed.
+#  In production, this file is managed by the Compliance team.
 #
-#  ⚠️  IMPORTANTE:
-#  Si la IA genera una respuesta que viola CUALQUIERA de estas
-#  reglas, el sistema la bloquea ANTES de que llegue al cliente.
+#  ⚠️  IMPORTANT:
+#  If the AI generates a response that violates ANY of these rules,
+#  the system blocks it BEFORE it reaches the client.
 # ═══════════════════════════════════════════════════════════════
 
 policies:
-  # ── Límites de Prima ────────────────────────────────────────
-  # La IA no puede cotizar por encima ni por debajo de estos valores.
-  max_premium_eur: 50000.0 # Prima máxima cotizable
-  min_premium_eur: 50.0 # Prima mínima aceptable (si aprobado)
+  # ── Premium Limits ──────────────────────────────────────────
+  # The AI cannot quote above or below these values.
+  max_premium_eur: 50000.0 # Maximum quotable premium
+  min_premium_eur: 50.0 # Minimum acceptable premium (if approved)
 
-  # ── Límites de Descuento ────────────────────────────────────
-  # Nota: 0.15 = 15%. El PolicyEngine convierte a % internamente.
-  max_discount: 0.15 # Descuento máximo permitido (15%)
-  high_risk_max_discount: 0.05 # Descuento máx. en pólizas de riesgo ALTO (5%)
+  # ── Discount Limits ─────────────────────────────────────────
+  # Note: 0.15 = 15%. The PolicyEngine converts to % internally.
+  max_discount: 0.15 # Maximum discount allowed (15%)
+  high_risk_max_discount: 0.05 # Max discount on HIGH risk policies (5%)
 
-  # ── Restricciones de Cliente ────────────────────────────────
-  min_age_insured: 18 # Edad mínima del asegurado (años)
+  # ── Client Restrictions ─────────────────────────────────────
+  min_age_insured: 18 # Minimum insurable age (years)
 
-  # ── Zonas No Asegurables ────────────────────────────────────
-  # Regiones bloqueadas por riesgo catastrófico o regulación.
-  # Ninguna cotización puede procesarse para estas zonas.
+  # ── Non-Insurable Zones ─────────────────────────────────────
+  # Regions blocked due to catastrophic risk or regulation.
+  # No quote can be processed for these zones.
   restricted_regions:
     - "ZONA_CONFLICTO_1"
     - "ZONA_CATASTROFE_A"
     - "REGION_EMBARGADA_B"
 
-  # ── Campos Requeridos por Lattice ───────────────────────────
-  # Lattice Privacy Proxy DEBE haber validado estos campos antes
-  # de que la petición llegue al LLM. Sirve como checklist de auditoría.
+  # ── Lattice-Required Fields ─────────────────────────────────
+  # Lattice Privacy Proxy MUST have validated these fields before
+  # the request reaches the LLM. Serves as an audit checklist.
   required_fields:
-    - "DNI"
+    - "SSN"
     - "EMAIL"
     - "PHONE"
 
-# ── Configuración de Guardrails ─────────────────────────────
+# ── Guardrails Configuration ────────────────────────────────
 guardrails:
-  block_hallucinated_discounts: true # Bloquear discounts fuera de rango
-  log_all_violations: true # Registrar TODAS las violaciones en log
-  max_llm_retries: 0 # Reintentos al LLM (0 = fail-fast)
+  block_hallucinated_discounts: true # Block out-of-range discounts
+  log_all_violations: true # Log ALL violations
+  max_llm_retries: 0 # LLM retries (0 = fail-fast)

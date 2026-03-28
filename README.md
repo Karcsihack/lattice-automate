@@ -9,100 +9,100 @@
 
 ---
 
-## ⚠️ Requisito Obligatorio
+## ⚠️ Required Dependency
 
 > **This project requires [Lattice Privacy Proxy](https://github.com/Karcsihack/lattice-proxy) running on port 8080.**  
 > Lattice anonymizes all personal data (names, IDs, medical info) **before** it reaches the LLM.  
 > Without it, your users' data is exposed to third-party AI providers.
 
 ```bash
-# Inicia Lattice primero (desde el repo lattice-proxy):
+# Start Lattice first (from the lattice-proxy repo):
 .\lattice.exe
 ```
 
 ---
 
-## ¿Qué es Lattice-Automate?
+## What is Lattice-Automate?
 
-**Lattice-Automate** convierte la IA de un experimento en una herramienta que una aseguradora o un banco pueden comprar. Lo hace resolviendo los dos problemas que impiden que las empresas adopten IA:
+**Lattice-Automate** turns AI from an experiment into a tool that an insurer or a bank would actually buy. It does so by solving the two problems that stop companies from adopting AI:
 
-| Problema                                           | Solución                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------ |
-| "La IA puede filtrar datos personales de clientes" | **Lattice Proxy** — todo pasa por un filtro de anonimización |
-| "La IA puede inventarse precios o condiciones"     | **PolicyEngine** — valida cada respuesta antes de mostrarla  |
+| Problem                                         | Solution                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------ |
+| "The AI might leak personal client data"        | **Lattice Proxy** — every request passes through an anonymization filter |
+| "The AI might hallucinate prices or conditions" | **PolicyEngine** — validates every response before it reaches the user   |
 
-### La arquitectura completa (los dos repositorios):
+### Full architecture (both repositories):
 
 ```
-[Usuario]
+[User]
     │
     ▼
-[LatticeAgent]          ← Este repo: lógica del agente
+[LatticeAgent]          ← This repo: agent logic
     │
-    ├─► [Lattice Proxy :8080]  ← Repo lattice-proxy: anonimización
+    ├─► [Lattice Proxy :8080]  ← lattice-proxy repo: anonymization
     │         │
     │         ▼
     │       [LLM]  (Mistral, GPT-4, etc.)
     │         │
-    │    Respuesta con datos anonimizados
+    │    Response with anonymized data
     │
-    ├─► [Pydantic Schema]      ← Valida estructura JSON (sin alucinaciones)
+    ├─► [Pydantic Schema]      ← Validates JSON structure (no hallucinations)
     │
-    └─► [PolicyEngine]         ← Valida reglas de negocio
+    └─► [PolicyEngine]         ← Validates business rules
             │
             ▼
-    [Respuesta segura al usuario]
+    [Safe response to user]
 ```
 
 ---
 
-## Instalación
+## Installation
 
 ```bash
-# 1. Clona este repositorio
+# 1. Clone this repository
 git clone https://github.com/Karcsihack/lattice-automate.git
 cd lattice-automate
 
-# 2. Crea entorno virtual
+# 2. Create a virtual environment
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 # source .venv/bin/activate   # Linux/Mac
 
-# 3. Instala dependencias
+# 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configura variables de entorno
+# 4. Set up environment variables
 copy .env.example .env
-# Edita .env si tu Lattice corre en un puerto distinto
+# Edit .env if your Lattice proxy runs on a different port
 ```
 
 ---
 
-## Uso
+## Usage
 
-### Demo automática (5 casos de prueba)
+### Automated demo (5 test cases)
 
 ```bash
 python main.py
 ```
 
-La demo ejecuta 5 escenarios reales:
+The demo runs 5 real-world scenarios:
 
-| Caso | Descripción                               | Resultado esperado                 |
-| ---- | ----------------------------------------- | ---------------------------------- |
-| 1    | Cotización normal, adulto, zona válida    | ✅ Aprobado                        |
-| 2    | Solicitante menor de edad (16 años)       | 🛡️ Bloqueado PRE-LLM (POLICY_101)  |
-| 3    | Zona restringida (ZONA_CONFLICTO_1)       | 🛡️ Bloqueado PRE-LLM (POLICY_102)  |
-| 4    | Solicitud de descuento del 25%            | 🛡️ Bloqueado POST-LLM (POLICY_001) |
-| 5    | Seguimiento con historial de conversación | ✅ Procesado con contexto          |
+| Case | Description                          | Expected result                  |
+| ---- | ------------------------------------ | -------------------------------- |
+| 1    | Normal quote, adult, valid region    | ✅ Approved                      |
+| 2    | Underage applicant (16 years old)    | 🛡️ Blocked PRE-LLM (POLICY_101)  |
+| 3    | Restricted region (ZONA_CONFLICTO_1) | 🛡️ Blocked PRE-LLM (POLICY_102)  |
+| 4    | Request for 25% discount             | 🛡️ Blocked POST-LLM (POLICY_001) |
+| 5    | Follow-up with conversation history  | ✅ Processed with context        |
 
-### Modo interactivo
+### Interactive mode
 
 ```bash
 python main.py interactive
 ```
 
-### Importar el agente en tu código
+### Import the agent in your code
 
 ```python
 from main import LatticeAgent, PolicyViolationError, LatticeConnectionError
@@ -110,157 +110,157 @@ from main import LatticeAgent, PolicyViolationError, LatticeConnectionError
 agent = LatticeAgent()
 
 try:
-    # Pasa edad y región para validación pre-LLM (sin gastar tokens)
+    # Pass age and region for pre-LLM validation (no tokens spent)
     result = agent.process(
-        "Quiero asegurar mi piso de 90m² en Barcelona, tengo 38 años.",
-        edad=38,
-        region="BARCELONA",
+        "I want to insure my 90m² flat in London. I am 38 years old.",
+        age=38,
+        region="LONDON",
     )
-    print(f"Prima: {result.valor_final:.2f} EUR")
-    print(f"Riesgo: {result.nivel_riesgo}")
-    print(f"Aprobado: {result.aprobado}")
+    print(f"Premium: {result.final_value:.2f} EUR")
+    print(f"Risk:    {result.risk_level}")
+    print(f"Approved: {result.approved}")
 
 except PolicyViolationError as e:
-    # Captura tanto violaciones pre-LLM (edad/región) como post-LLM (descuento/prima)
-    print(f"Bloqueado: {e}")
+    # Catches both pre-LLM violations (age/region) and post-LLM (discount/premium)
+    print(f"Blocked: {e}")
 
 except LatticeConnectionError as e:
-    print(f"Lattice Proxy no disponible: {e}")
+    print(f"Lattice Proxy unavailable: {e}")
 ```
 
 ---
 
-## Componentes principales
+## Core Components
 
 ### `InsuranceQuoteResponse` (Pydantic Schema)
 
-Define la única respuesta válida que puede dar la IA. Si la IA devuelve cualquier otra cosa, se rechaza en validación.
+Defines the only valid response the AI can produce. If the AI returns anything else, it is rejected at validation.
 
 ```python
 class InsuranceQuoteResponse(BaseModel):
-    explicacion: str           # Obligatorio, mínimo 10 caracteres
-    aprobado: bool             # True/False — sin ambigüedad
-    valor_final: float         # EUR, >= 0
-    descuento_aplicado: float  # 0.0 a 100.0
-    nivel_riesgo: str          # Exactamente: "BAJO" | "MEDIO" | "ALTO"
+    explanation: str       # Required, minimum 10 characters
+    approved: bool         # True/False — no ambiguity
+    final_value: float     # EUR, >= 0
+    discount_applied: float  # 0.0 to 100.0
+    risk_level: str        # Exactly: "LOW" | "MEDIUM" | "HIGH"
 ```
 
-### `PolicyEngine` (Guardrails de Negocio)
+### `PolicyEngine` (Business Guardrails)
 
-Capa determinista de reglas que **no puede ser evadida por el LLM**.
-Las reglas se cargan desde [`business_rules.yaml`](business_rules.yaml) en tiempo de ejecución — sin tocar código.
+Deterministic rule layer that **cannot be bypassed by the LLM**.
+Rules are loaded from [`business_rules.yaml`](business_rules.yaml) at startup — no code changes required.
 
-**Validación PRE-LLM** (antes de gastar tokens):
+**PRE-LLM validation** (before spending any tokens):
 
-| Regla      | Descripción                  | YAML key             |
-| ---------- | ---------------------------- | -------------------- |
-| POLICY_101 | Edad mínima del asegurado    | `min_age_insured`    |
-| POLICY_102 | Zonas geográficas bloqueadas | `restricted_regions` |
+| Rule       | Description                | YAML key             |
+| ---------- | -------------------------- | -------------------- |
+| POLICY_101 | Minimum insurable age      | `min_age_insured`    |
+| POLICY_102 | Blocked geographic regions | `restricted_regions` |
 
-**Validación POST-LLM** (sobre la respuesta de la IA):
+**POST-LLM validation** (against the AI response):
 
-| Regla      | Descripción                        | YAML key                 |
-| ---------- | ---------------------------------- | ------------------------ |
-| POLICY_001 | Descuento máximo: 15%              | `max_discount`           |
-| POLICY_002 | Prima máxima: 50.000 EUR           | `max_premium_eur`        |
-| POLICY_003 | Prima mínima (si aprobado): 50 EUR | `min_premium_eur`        |
-| POLICY_004 | Riesgo ALTO → descuento máximo 5%  | `high_risk_max_discount` |
+| Rule       | Description                           | YAML key                 |
+| ---------- | ------------------------------------- | ------------------------ |
+| POLICY_001 | Maximum discount: 15%                 | `max_discount`           |
+| POLICY_002 | Maximum premium: 50,000 EUR           | `max_premium_eur`        |
+| POLICY_003 | Minimum premium (if approved): 50 EUR | `min_premium_eur`        |
+| POLICY_004 | HIGH risk → max discount 5%           | `high_risk_max_discount` |
 
-### `LatticeAgent` (Orquestador)
+### `LatticeAgent` (Orchestrator)
 
-Gestiona el pipeline completo incluyendo **memoria de conversación** con límite de tokens que respeta la configuración del Vault de Lattice.
+Manages the full pipeline including **conversation memory** with a token limit that respects the Lattice Vault configuration.
 
 ---
 
-## `business_rules.yaml` — Tu Arma Secreta
+## `business_rules.yaml` — Your Secret Weapon
 
-Este archivo es el **"cerebro" del PolicyEngine**. El equipo de Compliance lo edita sin tocar código Python.
-Cada vez que el sistema arranca, carga las reglas en caliente.
+This file is the **"brain" of the PolicyEngine**. The Compliance team edits it without touching Python code.
+Every time the system starts, rules are reloaded from disk.
 
 ```yaml
 policies:
-  max_premium_eur: 50000.0 # Prima máxima cotizable
-  min_premium_eur: 50.0 # Prima mínima aceptable
-  max_discount: 0.15 # Descuento máximo (15%)
-  high_risk_max_discount: 0.05 # Descuento máx. en riesgo ALTO (5%)
-  min_age_insured: 18 # Edad mínima del asegurado
+  max_premium_eur: 50000.0 # Maximum quotable premium
+  min_premium_eur: 50.0 # Minimum acceptable premium
+  max_discount: 0.15 # Maximum discount (15%)
+  high_risk_max_discount: 0.05 # Max discount on HIGH risk (5%)
+  min_age_insured: 18 # Minimum insurable age
 
-  restricted_regions: # Zonas no asegurables
+  restricted_regions: # Non-insurable zones
     - "ZONA_CONFLICTO_1"
     - "ZONA_CATASTROFE_A"
 
-  required_fields: # Campos que Lattice debe haber validado
-    - "DNI"
+  required_fields: # Fields Lattice must have validated
+    - "SSN"
     - "EMAIL"
     - "PHONE"
 
 guardrails:
   block_hallucinated_discounts: true
   log_all_violations: true
-  max_llm_retries: 0 # 0 = fail-fast (recomendado para producción)
+  max_llm_retries: 0 # 0 = fail-fast (recommended for production)
 ```
 
-> **Caso de venta:** El Director de Compliance de una aseguradora puede cambiar `max_discount: 0.15`
-> a `max_discount: 0.10` y el sistema completo lo respeta en el siguiente arranque.
-> Sin PR. Sin reunión con el equipo de ingeniería.
+> **Sales pitch:** The Head of Compliance at an insurer can change `max_discount: 0.15`
+> to `max_discount: 0.10` and the entire system respects it on the next restart.
+> No PR. No engineering meeting required.
 
 ---
 
-## Configuración
+## Configuration
 
-Crea un archivo `.env` basado en `.env.example`:
+Create a `.env` file from `.env.example`:
 
 ```env
-# URL del Lattice Privacy Proxy
+# Lattice Privacy Proxy URL
 LATTICE_URL=http://localhost:8080/v1/chat/completions
 
-# Modelo LLM a usar (el proxy decide el destino real)
+# LLM model to use (the proxy decides the actual backend)
 LLM_MODEL=mistral
 
-# Temperatura baja = más determinismo (0.0 = completamente determinista)
+# Low temperature = more determinism (0.0 = fully deterministic)
 LLM_TEMPERATURE=0.1
 
-# Límite de caracteres de historial (respeta el vault de tokens de Lattice)
+# Conversation history character limit (respects the Lattice token vault)
 MAX_HISTORY_CHARS=16000
 ```
 
-> Los límites del PolicyEngine ya **no** van en `.env` — ahora viven en [`business_rules.yaml`](business_rules.yaml).
+> Business rule limits are no longer in `.env` — they live in [`business_rules.yaml`](business_rules.yaml).
 
 ---
 
-## Por qué esto importa para tu empresa
+## Why this matters for your business
 
-Esta arquitectura implementa lo que en la industria se llama **"Constitutional AI"** — IA con una constitución de negocio:
+This architecture implements what the industry calls **"Constitutional AI"** — AI with a business constitution:
 
-- **Google/OpenAI llaman así** a la IA que no puede mentir ni saltarse reglas
-- **Las aseguradoras y bancos** lo necesitan para pasar auditorías regulatorias (GDPR, Solvencia II, DORA)
-- **Tú vendes** el ecosistema completo: **Privacidad (Lattice Proxy) + Control (Lattice Automate)**
+- **Google/OpenAI** use this term for AI that cannot lie or bypass rules
+- **Insurers and banks** need it to pass regulatory audits (GDPR, Solvency II, DORA)
+- **You sell** the complete ecosystem: **Privacy (Lattice Proxy) + Control (Lattice Automate)**
 
-### El flujo de venta:
+### The sales conversation:
 
 ```
-Cliente: "¿Y si la IA da un precio equivocado?"
-Tú:      "Imposible. El PolicyEngine lo bloquea antes de que salga del sistema."
+Client: "What if the AI gives a wrong price?"
+You:    "Impossible. The PolicyEngine blocks it before it leaves the system."
 
-Cliente: "¿Y los datos de mis clientes?"
-Tú:      "Nunca llegan al LLM. Lattice Proxy los anonimiza primero."
+Client: "What about our clients' personal data?"
+You:    "It never reaches the LLM. Lattice Proxy anonymizes it first."
 ```
 
 ---
 
-## Ecosistema Lattice
+## Lattice Ecosystem
 
-| Repositorio                                                  | Función                             | Estado        |
-| ------------------------------------------------------------ | ----------------------------------- | ------------- |
-| [lattice-proxy](https://github.com/Karcsihack/lattice-proxy) | Proxy de privacidad y anonimización | ✅ Disponible |
-| **lattice-automate**                                         | Framework de agentes con guardrails | 🚀 Este repo  |
-
----
-
-## Licencia
-
-MIT — Libre para uso comercial con atribución.
+| Repository                                                   | Function                           | Status       |
+| ------------------------------------------------------------ | ---------------------------------- | ------------ |
+| [lattice-proxy](https://github.com/Karcsihack/lattice-proxy) | Privacy proxy and anonymization    | ✅ Available |
+| **lattice-automate**                                         | AI agent framework with guardrails | 🚀 This repo |
 
 ---
 
-_Construido con Python, Pydantic y la convicción de que la IA empresarial tiene que ser predecible._
+## License
+
+MIT — Free for commercial use with attribution.
+
+---
+
+_Built with Python, Pydantic, and the conviction that enterprise AI must be predictable._
