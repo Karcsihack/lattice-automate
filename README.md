@@ -80,11 +80,21 @@ copy .env.example .env
 
 ## Uso
 
-### Demo automática (3 casos de prueba)
+### Demo automática (5 casos de prueba)
 
 ```bash
 python main.py
 ```
+
+La demo ejecuta 5 escenarios reales:
+
+| Caso | Descripción                               | Resultado esperado                 |
+| ---- | ----------------------------------------- | ---------------------------------- |
+| 1    | Cotización normal, adulto, zona válida    | ✅ Aprobado                        |
+| 2    | Solicitante menor de edad (16 años)       | 🛡️ Bloqueado PRE-LLM (POLICY_101)  |
+| 3    | Zona restringida (ZONA_CONFLICTO_1)       | 🛡️ Bloqueado PRE-LLM (POLICY_102)  |
+| 4    | Solicitud de descuento del 25%            | 🛡️ Bloqueado POST-LLM (POLICY_001) |
+| 5    | Seguimiento con historial de conversación | ✅ Procesado con contexto          |
 
 ### Modo interactivo
 
@@ -100,13 +110,18 @@ from main import LatticeAgent, PolicyViolationError, LatticeConnectionError
 agent = LatticeAgent()
 
 try:
-    result = agent.process("Quiero asegurar mi piso de 90m² en Barcelona, tengo 38 años.")
+    # Pasa edad y región para validación pre-LLM (sin gastar tokens)
+    result = agent.process(
+        "Quiero asegurar mi piso de 90m² en Barcelona, tengo 38 años.",
+        edad=38,
+        region="BARCELONA",
+    )
     print(f"Prima: {result.valor_final:.2f} EUR")
     print(f"Riesgo: {result.nivel_riesgo}")
     print(f"Aprobado: {result.aprobado}")
 
 except PolicyViolationError as e:
-    # La IA intentó saltarse las reglas — bloqueado antes de llegar al usuario
+    # Captura tanto violaciones pre-LLM (edad/región) como post-LLM (descuento/prima)
     print(f"Bloqueado: {e}")
 
 except LatticeConnectionError as e:
@@ -132,18 +147,62 @@ class InsuranceQuoteResponse(BaseModel):
 
 ### `PolicyEngine` (Guardrails de Negocio)
 
-Capa determinista de reglas que **no puede ser evadida por el LLM**:
+Capa determinista de reglas que **no puede ser evadida por el LLM**.
+Las reglas se cargan desde [`business_rules.yaml`](business_rules.yaml) en tiempo de ejecución — sin tocar código.
 
-| Regla      | Descripción                        | Código                                 |
-| ---------- | ---------------------------------- | -------------------------------------- |
-| POLICY_001 | Descuento máximo: 15%              | Configurable via `POLICY_MAX_DISCOUNT` |
-| POLICY_002 | Prima máxima: 50.000 EUR           | Configurable via `POLICY_MAX_PREMIUM`  |
-| POLICY_003 | Prima mínima (si aprobado): 50 EUR | Configurable via `POLICY_MIN_PREMIUM`  |
-| POLICY_004 | Riesgo ALTO → descuento máximo 5%  | Hardcoded por seguridad                |
+**Validación PRE-LLM** (antes de gastar tokens):
+
+| Regla      | Descripción                  | YAML key             |
+| ---------- | ---------------------------- | -------------------- |
+| POLICY_101 | Edad mínima del asegurado    | `min_age_insured`    |
+| POLICY_102 | Zonas geográficas bloqueadas | `restricted_regions` |
+
+**Validación POST-LLM** (sobre la respuesta de la IA):
+
+| Regla      | Descripción                        | YAML key                 |
+| ---------- | ---------------------------------- | ------------------------ |
+| POLICY_001 | Descuento máximo: 15%              | `max_discount`           |
+| POLICY_002 | Prima máxima: 50.000 EUR           | `max_premium_eur`        |
+| POLICY_003 | Prima mínima (si aprobado): 50 EUR | `min_premium_eur`        |
+| POLICY_004 | Riesgo ALTO → descuento máximo 5%  | `high_risk_max_discount` |
 
 ### `LatticeAgent` (Orquestador)
 
 Gestiona el pipeline completo incluyendo **memoria de conversación** con límite de tokens que respeta la configuración del Vault de Lattice.
+
+---
+
+## `business_rules.yaml` — Tu Arma Secreta
+
+Este archivo es el **"cerebro" del PolicyEngine**. El equipo de Compliance lo edita sin tocar código Python.
+Cada vez que el sistema arranca, carga las reglas en caliente.
+
+```yaml
+policies:
+  max_premium_eur: 50000.0 # Prima máxima cotizable
+  min_premium_eur: 50.0 # Prima mínima aceptable
+  max_discount: 0.15 # Descuento máximo (15%)
+  high_risk_max_discount: 0.05 # Descuento máx. en riesgo ALTO (5%)
+  min_age_insured: 18 # Edad mínima del asegurado
+
+  restricted_regions: # Zonas no asegurables
+    - "ZONA_CONFLICTO_1"
+    - "ZONA_CATASTROFE_A"
+
+  required_fields: # Campos que Lattice debe haber validado
+    - "DNI"
+    - "EMAIL"
+    - "PHONE"
+
+guardrails:
+  block_hallucinated_discounts: true
+  log_all_violations: true
+  max_llm_retries: 0 # 0 = fail-fast (recomendado para producción)
+```
+
+> **Caso de venta:** El Director de Compliance de una aseguradora puede cambiar `max_discount: 0.15`
+> a `max_discount: 0.10` y el sistema completo lo respeta en el siguiente arranque.
+> Sin PR. Sin reunión con el equipo de ingeniería.
 
 ---
 
@@ -163,12 +222,9 @@ LLM_TEMPERATURE=0.1
 
 # Límite de caracteres de historial (respeta el vault de tokens de Lattice)
 MAX_HISTORY_CHARS=16000
-
-# Límites del PolicyEngine (ajustables por empresa)
-POLICY_MAX_DISCOUNT=15.0
-POLICY_MAX_PREMIUM=50000.0
-POLICY_MIN_PREMIUM=50.0
 ```
+
+> Los límites del PolicyEngine ya **no** van en `.env` — ahora viven en [`business_rules.yaml`](business_rules.yaml).
 
 ---
 

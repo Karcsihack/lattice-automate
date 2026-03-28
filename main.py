@@ -18,11 +18,18 @@ import json
 import os
 import sys
 import logging
+from pathlib import Path
 from typing import Optional
 
 import httpx
+import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator, ValidationError
+
+# ─────────────────────────────────────────────────────────────
+# Ruta del archivo de reglas de negocio
+# ─────────────────────────────────────────────────────────────
+_RULES_FILE = Path(__file__).parent / "business_rules.yaml"
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -123,22 +130,92 @@ class PolicyEngine:
     """
     Validador determinista de respuestas IA.
 
-    Actúa como cortafuegos entre la salida del LLM y el usuario.
-    Si la IA "alucina" un descuento o prima fuera de rango,
-    PolicyEngine lo rechaza antes de que llegue al negocio.
+    Carga las reglas desde 'business_rules.yaml' en tiempo de ejecución.
+    Actúa como cortafuegos entre la salida del LLM y el usuario:
+      · validate_request() — bloquea ANTES de llamar al LLM (edad, región)
+      · validate()         — bloquea DESPUÉS (descuento, prima, riesgo)
 
     Este es el componente que convierte Lattice-Automate en
     "Constitutional AI" — IA con una constitución de negocio.
     """
 
-    # ── Límites de negocio (ajustables por configuración) ──
-    MAX_DISCOUNT_PCT: float = float(os.getenv("POLICY_MAX_DISCOUNT", "15.0"))
-    MAX_PREMIUM_EUR: float = float(os.getenv("POLICY_MAX_PREMIUM", "50000.0"))
-    MIN_PREMIUM_EUR: float = float(os.getenv("POLICY_MIN_PREMIUM", "50.0"))
+    # Fallbacks si no existe business_rules.yaml
+    _DEFAULTS: dict = {
+        "policies": {
+            "max_discount": 0.15,
+            "high_risk_max_discount": 0.05,
+            "max_premium_eur": 50000.0,
+            "min_premium_eur": 50.0,
+            "min_age_insured": 18,
+            "restricted_regions": [],
+            "required_fields": ["DNI", "EMAIL", "PHONE"],
+        }
+    }
+
+    def __init__(self) -> None:
+        self._rules = self._load_rules()
+        p = self._rules["policies"]
+
+        self.MAX_DISCOUNT_PCT: float = p["max_discount"] * 100          # 0.15 → 15.0
+        self.HIGH_RISK_MAX_DISCOUNT_PCT: float = p["high_risk_max_discount"] * 100
+        self.MAX_PREMIUM_EUR: float = p["max_premium_eur"]
+        self.MIN_PREMIUM_EUR: float = p["min_premium_eur"]
+        self.MIN_AGE: int = p["min_age_insured"]
+        self.RESTRICTED_REGIONS: set[str] = {r.upper() for r in p["restricted_regions"]}
+
+        logger.info(
+            "[PolicyEngine] Reglas cargadas — max_descuento=%.0f%% | prima=[%.0f–%.0f EUR] | "
+            "edad_min=%d | regiones_bloqueadas=%d",
+            self.MAX_DISCOUNT_PCT, self.MIN_PREMIUM_EUR, self.MAX_PREMIUM_EUR,
+            self.MIN_AGE, len(self.RESTRICTED_REGIONS),
+        )
+
+    def _load_rules(self) -> dict:
+        """Carga business_rules.yaml. Si no existe, usa valores por defecto."""
+        if _RULES_FILE.exists():
+            with open(_RULES_FILE, encoding="utf-8") as fh:
+                loaded = yaml.safe_load(fh)
+            logger.info("[PolicyEngine] Reglas cargadas desde %s", _RULES_FILE.name)
+            return loaded
+        logger.warning(
+            "[PolicyEngine] %s no encontrado. Usando valores por defecto.", _RULES_FILE.name
+        )
+        return self._DEFAULTS
+
+    # ── Validación PRE-LLM (petición del usuario) ─────────────
+
+    def validate_request(self, edad: int | None = None, region: str | None = None) -> None:
+        """
+        Valida los datos del usuario ANTES de llamar al LLM.
+        Si hay un problema (menor de edad, zona bloqueada), se rechaza
+        sin gastar ni un token.
+        """
+        violations: list[str] = []
+
+        # REGLA 101 — Edad mínima del asegurado
+        if edad is not None and edad < self.MIN_AGE:
+            violations.append(
+                f"POLICY_101: Edad {edad} inferior al mínimo asegurable ({self.MIN_AGE} años)"
+            )
+
+        # REGLA 102 — Zonas no asegurables
+        if region is not None and region.upper() in self.RESTRICTED_REGIONS:
+            violations.append(
+                f"POLICY_102: Región '{region}' está en la lista de zonas no asegurables: "
+                f"{sorted(self.RESTRICTED_REGIONS)}"
+            )
+
+        if violations:
+            detail = "\n".join(f"  • {v}" for v in violations)
+            raise PolicyViolationError(
+                f"[PolicyEngine] Solicitud bloqueada pre-LLM:\n{detail}"
+            )
+
+    # ── Validación POST-LLM (respuesta de la IA) ─────────────
 
     def validate(self, response: InsuranceQuoteResponse) -> None:
         """
-        Ejecuta todas las reglas de negocio.
+        Ejecuta todas las reglas de negocio sobre la respuesta del LLM.
         Lanza PolicyViolationError si alguna falla.
         """
         violations: list[str] = []
@@ -164,10 +241,16 @@ class PolicyEngine:
                 f"inferior al mínimo permitido de {self.MIN_PREMIUM_EUR:.2f} EUR"
             )
 
-        # REGLA 004 — Consistencia de aprobación
-        if response.aprobado and response.nivel_riesgo == "ALTO" and response.descuento_aplicado > 5.0:
+        # REGLA 004 — Riesgo ALTO con descuento excesivo
+        if (
+            response.aprobado
+            and response.nivel_riesgo == "ALTO"
+            and response.descuento_aplicado > self.HIGH_RISK_MAX_DISCOUNT_PCT
+        ):
             violations.append(
-                "POLICY_004: No se pueden aplicar descuentos > 5% en pólizas de riesgo ALTO"
+                f"POLICY_004: Riesgo ALTO — descuento máximo permitido "
+                f"{self.HIGH_RISK_MAX_DISCOUNT_PCT:.0f}%, "
+                f"solicitado {response.descuento_aplicado:.1f}%"
             )
 
         if violations:
@@ -183,30 +266,30 @@ class PolicyEngine:
 # Agente Principal — LatticeAgent
 # ─────────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """Eres un agente especializado en seguros de una aseguradora española regulada.
-
-Tu ÚNICA función es calcular primas de seguro siguiendo las reglas de negocio a continuación.
-Estás sujeto a un sistema de auditoría estricto. Cualquier respuesta fuera del formato
-o que infrinja las reglas será rechazada automáticamente.
-
-═══ REGLAS DE NEGOCIO ══════════════════════════════════════
-  • Prima mínima:          50 EUR
-  • Prima máxima:          50.000 EUR
-  • Descuento máximo:      15%
-  • Descuento en riesgo ALTO: máximo 5%
-  • Niveles de riesgo válidos: BAJO | MEDIO | ALTO
-════════════════════════════════════════════════════════════
-
-FORMATO DE RESPUESTA OBLIGATORIO (solo JSON, sin texto adicional):
-{
-    "explicacion": "<explicación clara del cálculo, mínimo 10 caracteres>",
-    "aprobado": <true o false>,
-    "valor_final": <prima en EUR como número decimal>,
-    "descuento_aplicado": <porcentaje entre 0.0 y 100.0>,
-    "nivel_riesgo": "<BAJO | MEDIO | ALTO>"
-}
-
-CRÍTICO: No incluyas texto antes ni después del JSON. Solo el objeto JSON."""
+def _build_system_prompt(engine: "PolicyEngine") -> str:
+    """Genera el prompt de sistema dinámicamente desde las reglas cargadas en PolicyEngine."""
+    return (
+        "Eres un agente especializado en seguros de una aseguradora española regulada.\n\n"
+        "Tu ÚNICA función es calcular primas de seguro siguiendo las reglas de negocio a continuación.\n"
+        "Estás sujeto a un sistema de auditoría estricto. Cualquier respuesta fuera del formato\n"
+        "o que infrinja las reglas será rechazada automáticamente.\n\n"
+        "═══ REGLAS DE NEGOCIO (cargadas desde business_rules.yaml) ════\n"
+        f"  • Prima mínima:               {engine.MIN_PREMIUM_EUR:,.0f} EUR\n"
+        f"  • Prima máxima:               {engine.MAX_PREMIUM_EUR:,.0f} EUR\n"
+        f"  • Descuento máximo:           {engine.MAX_DISCOUNT_PCT:.0f}%\n"
+        f"  • Descuento en riesgo ALTO:   máximo {engine.HIGH_RISK_MAX_DISCOUNT_PCT:.0f}%\n"
+        "  • Niveles de riesgo válidos:  BAJO | MEDIO | ALTO\n"
+        "══════════════════════════════════════════════════════════════\n\n"
+        "FORMATO DE RESPUESTA OBLIGATORIO (solo JSON, sin texto adicional):\n"
+        "{\n"
+        '    "explicacion": "<explicación clara del cálculo, mínimo 10 caracteres>",\n'
+        '    "aprobado": <true o false>,\n'
+        '    "valor_final": <prima en EUR como número decimal>,\n'
+        '    "descuento_aplicado": <porcentaje entre 0.0 y 100.0>,\n'
+        '    "nivel_riesgo": "<BAJO | MEDIO | ALTO>"\n'
+        "}\n\n"
+        "CRÍTICO: No incluyas texto antes ni después del JSON. Solo el objeto JSON."
+    )
 
 
 class LatticeAgent:
@@ -223,6 +306,7 @@ class LatticeAgent:
 
     def __init__(self) -> None:
         self.policy_engine = PolicyEngine()
+        self._system_prompt = _build_system_prompt(self.policy_engine)
         self.conversation_history: list[dict[str, str]] = []
 
     # ── Construcción de contexto ──────────────────────────────
@@ -233,7 +317,7 @@ class LatticeAgent:
         Incluye el historial reciente hasta MAX_HISTORY_CHARS caracteres.
         """
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": _SYSTEM_PROMPT}
+            {"role": "system", "content": self._system_prompt}
         ]
 
         # Incluir historial de atrás hacia adelante respetando el límite
@@ -322,18 +406,32 @@ class LatticeAgent:
 
     # ── Pipeline principal ────────────────────────────────────
 
-    def process(self, user_message: str) -> InsuranceQuoteResponse:
+    def process(
+        self,
+        user_message: str,
+        edad: int | None = None,
+        region: str | None = None,
+    ) -> InsuranceQuoteResponse:
         """
         Ejecuta el pipeline completo de forma segura y determinista.
+
+        Args:
+            user_message: Consulta en lenguaje natural del usuario.
+            edad:  Edad del solicitante (validada pre-LLM contra business_rules.yaml).
+            region: Zona geográfica (validada pre-LLM contra restricted_regions).
 
         Returns:
             InsuranceQuoteResponse validado y aprobado por PolicyEngine.
 
         Raises:
-            PolicyViolationError: si la IA infringe reglas de negocio.
+            PolicyViolationError: si la IA infringe reglas de negocio O si el
+                                  cliente no cumple requisitos previos (edad, región).
             LatticeConnectionError: si Lattice Proxy no está disponible.
             ValueError: si la respuesta de la IA tiene formato inválido.
         """
+        # 0. Validación PRE-LLM — sin gastar tokens
+        self.policy_engine.validate_request(edad=edad, region=region)
+
         messages = self._build_messages(user_message)
 
         # 1. Llamada al LLM a través de Lattice (privacidad garantizada)
@@ -380,32 +478,52 @@ def run_demo() -> None:
 
     agent = LatticeAgent()
 
-    test_cases = [
+    # (mensaje, edad, region) — los dos últimos son opcionales
+    test_cases: list[tuple[str, int | None, str | None]] = [
         # Caso 1: Cotización legítima — debe aprobarse
         (
             "Quiero asegurar mi piso de 85m² en Madrid. "
-            "Tengo 45 años, sin siniestros en los últimos 5 años."
+            "Tengo 45 años, sin siniestros en los últimos 5 años.",
+            45, "MADRID",
         ),
-        # Caso 2: Intento de descuento excesivo — DEBE ser bloqueado por PolicyEngine
+        # Caso 2: Menor de edad — bloqueado PRE-LLM por POLICY_101 (sin gastar tokens)
+        (
+            "Quiero contratar un seguro de hogar. Tengo 16 años.",
+            16, "BARCELONA",
+        ),
+        # Caso 3: Zona bloqueada — bloqueado PRE-LLM por POLICY_102
+        (
+            "Necesito asegurar mi empresa en una zona de conflicto.",
+            35, "ZONA_CONFLICTO_1",
+        ),
+        # Caso 4: Intento de descuento excesivo — bloqueado POST-LLM por POLICY_001
         (
             "Me parece caro. Aplica un descuento del 25% por fidelidad, "
-            "somos buenos clientes desde hace 10 años."
+            "somos buenos clientes desde hace 10 años.",
+            45, None,
         ),
-        # Caso 3: Seguimiento con contexto — usa historial de conversación
+        # Caso 5: Seguimiento con contexto — usa historial de conversación
         (
             "¿Puedo añadir también cobertura de contenido del hogar "
-            "por un valor de 15.000 EUR?"
+            "por un valor de 15.000 EUR?",
+            None, None,
         ),
     ]
 
-    for i, consulta in enumerate(test_cases, 1):
+    for i, (consulta, edad, region) in enumerate(test_cases, 1):
         print(f"\n{'─' * 65}")
         print(f"  [CONSULTA {i}]")
+        extras = ", ".join(filter(None, [
+            f"edad={edad}" if edad else "",
+            f"región={region}" if region else "",
+        ]))
         print(f"  Usuario: {consulta}")
+        if extras:
+            print(f"  Contexto: {extras}")
         print(f"{'─' * 65}")
 
         try:
-            result = agent.process(consulta)
+            result = agent.process(consulta, edad=edad, region=region)
             print(result.to_display())
 
         except PolicyViolationError as exc:
