@@ -250,10 +250,11 @@ You:    "It never reaches the LLM. Lattice Proxy anonymizes it first."
 
 ## Lattice Ecosystem
 
-| Repository                                                   | Function                           | Status       |
-| ------------------------------------------------------------ | ---------------------------------- | ------------ |
-| [lattice-proxy](https://github.com/Karcsihack/lattice-proxy) | Privacy proxy and anonymization    | ✅ Available |
-| **lattice-automate**                                         | AI agent framework with guardrails | 🚀 This repo |
+| Repository                                                           | Language         | Function                                  | Status       |
+| -------------------------------------------------------------------- | ---------------- | ----------------------------------------- | ------------ |
+| [lattice-proxy](https://github.com/Karcsihack/lattice-proxy)         | Go               | Privacy proxy and anonymization           | ✅ Available |
+| **lattice-automate**                                                 | Python           | AI agent framework with guardrails        | 🚀 This repo |
+| [lattice-dashboard](https://github.com/Karcsihack/lattice-dashboard) | Python/Streamlit | Governance console & real-time monitoring | ✅ Available |
 
 ---
 
