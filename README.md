@@ -3,6 +3,7 @@
 > **AI Agent Framework with Business Guardrails**  
 > Deterministic AI responses for regulated industries — insurance, banking, legal.
 
+[![Security & Quality](https://github.com/Karcsihack/lattice-automate/actions/workflows/security.yml/badge.svg)](https://github.com/Karcsihack/lattice-automate/actions/workflows/security.yml)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)](https://python.org)
 [![Pydantic](https://img.shields.io/badge/Pydantic-v2-red?logo=pydantic)](https://docs.pydantic.dev)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
